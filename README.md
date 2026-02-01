@@ -45,9 +45,9 @@ TidyLang-baseline/
 
 ## Quick Start
 
-### Setup (First Time Only)
+### Setup
 
-See [SETUP.md](SETUP.md) for detailed installation instructions. Quick version:
+
 
 ```bash
 # Create virtual environment
@@ -118,22 +118,14 @@ Macro Accuracy: 57.7%
 
 ### Language Recognition Performance (flag=2 Data - Same Language vs Different Language)
 ```
-Target (Same Language):
-  - Mean cosine similarity: 0.8334
-  - Std deviation: 0.1154
 
-Non-target (Different Language):
-  - Mean cosine similarity: 0.6482
-  - Std deviation: 0.1318
-
-Similarity Gap: 0.1852
 Equal Error Rate (EER): 23.68%
 Decision Threshold: 0.745
 ```
 
-### Speaker Verification EER (Language Verification Trials)
+### Speaker Verification EER (Language Verification Trials for 5 languages)
 ```
-Equal Error Rate (EER): 36.14%
+Equal Error Rate (EER): 30.7%
 Decision Threshold: 0.754
 ```
 
@@ -157,7 +149,7 @@ flag    file_path                       language
 
 | Flag | Dataset | #speaker | Purpose | #lang |
 |------|---------|-------|---------|------|
-| **1** | Training | 4358 | Train the model to classify languages on speakers never seen during training | 35 |
+| **1** | Training | 4358 | Train the model to classify languages  | 35 |
 | **2** | Validation | 100 | Evaluate classification accuracy and language recognition on new speakers (unseen during training) | 35 |
 | **3** | Validation (Cross-lingual) | 100 | Test generalization: evaluate on training speakers but speaking in a different language | 20 |
 
@@ -182,20 +174,7 @@ The trial pairs are organized into 4 categories based on whether the speaker and
 | **Type 3** | Same | Different | `nontarget` | Within-speaker, cross-lingual discrimination |
 | **Type 4** | Different | Different | `nontarget` | Cross-speaker, cross-lingual discrimination |
 
-**Current Trial File Statistics:**
-- **183,603 target pairs** (same speaker, same language only - Type 1)
-- **407,725 nontarget pairs** (different speakers, different languages only - Type 4)
 
-**Note**: The current `trials_val_lang.txt` only includes Type 1 and Type 4 pairs. To evaluate robustness across all scenarios, you can generate trials with all 4 types using the `generate_trial_pairs.py` script:
-
-```bash
-# Generate comprehensive trials with all 4 types
-python generate_trial_pairs.py --output comprehensive_trials.txt \
-    --same-lang-same-spk 50000 \    # Type 1: target
-    --same-lang-diff-spk 50000 \    # Type 2: target
-    --diff-lang-same-spk 50000 \    # Type 3: nontarget
-    --diff-lang-diff-spk 50000      # Type 4: nontarget
-```
 
 **Trials file format** (`data/trials/trials_val_lang.txt`):
 ```
@@ -251,25 +230,7 @@ ArcFace Classifier
    - **Language Recognition EER**: Using flag=2 data, create same-language vs different-language pairs, compute EER
    - **Speaker Verification EER**: Using trials_val_lang.txt, compute same-speaker vs different-speaker EER
 
-3. **Checkpointing**:
-   - Save best_checkpoint.pt (highest validation macro accuracy)
-   - Save epoch checkpoints (epoch_0.pt, epoch_1.pt, ...)
-   - Log all metrics to separate files
 
-### Hyperparameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `batch_size` | 64 | Batch size for training |
-| `num_epochs` | 15 | Number of training epochs |
-| `arcface_margin` | 0.3 | Angular margin for ArcFace (larger = harder) |
-| `arcface_scale` | 30.0 | Feature scale for ArcFace (larger = sharper boundaries) |
-| `hidden_dim` | 512 | Hidden dimension in projection head |
-| `embedding_dim` | 256 | Final embedding dimension (fixed) |
-| `learning_rate` | 0.0001 | Initial learning rate (AdamW) |
-| `weight_decay` | 0.001 | Weight decay for AdamW |
-| `warmup_steps` | 1000 | Linear warmup steps |
-| `dropout` | 0.1 | Dropout in projection head |
 
 ## Understanding Results
 
@@ -277,7 +238,7 @@ ArcFace Classifier
 
 ### Interpreting Metrics
 
-- **Classification Accuracy**: Higher is better (aim for >85% macro accuracy on flag=2)
+- **Classification Accuracy**: Higher is better 
 - **Language Recognition EER**: Lower is better 
 
 
