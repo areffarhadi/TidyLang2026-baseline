@@ -137,12 +137,6 @@ Equal Error Rate (EER): 36.14%
 Decision Threshold: 0.754
 ```
 
-### Training Summary
-```
-Train Loss (Final): 1.4530
-Train Accuracy: 76.7%
-```
-
 ## Quick Start
 
 ## Training Details
@@ -159,15 +153,30 @@ flag    file_path                       language
 ...
 ```
 
-**Data Flags Explained:**
+**Data Flags in manifest file:**
 
-| Flag | Dataset | Split | Purpose | Note |
+| Flag | Dataset | #speaker | Purpose | #lang |
 |------|---------|-------|---------|------|
-| **1** | Training | New Speakers | Train the model to classify languages on speakers never seen during training | Core training data; highest sample count |
-| **2** | Validation | New Speakers | Evaluate classification accuracy and language recognition on new speakers (unseen during training) | Used for model selection and checkpoint saving; reports Micro/Macro accuracy and EER |
-| **3** | Validation (Cross-lingual) | Known Speakers, Different Language | Test generalization: evaluate on training speakers but speaking in a different language | Harder task; measures cross-lingual generalization; typically lower accuracy than flag=2 |
+| **1** | Training | 4358 | Train the model to classify languages on speakers never seen during training | 35 |
+| **2** | Validation | 100 | Evaluate classification accuracy and language recognition on new speakers (unseen during training) | 35 |
+| **3** | Validation (Cross-lingual) | 100 | Test generalization: evaluate on training speakers but speaking in a different language | 20 |
 
 The model trains on flag=1 data only. After each epoch, it validates on both flag=2 (domain-matched) and flag=3 (cross-lingual challenge) to monitor generalization.
+
+### Verification Trials
+
+The verification trials file (`data/trials/verification_trials.txt`) contains **591,328 trial pairs** used for language recognition evaluation. These trials test the model's ability to determine whether two utterances are in the same language or different languages.
+
+**Trial Composition:**
+- **16 multilingual speakers** (speakers who recorded in multiple languages)
+- **5 languages**: Abkhazian (ab), Hausa (ha), Upper Sorbian (hsb), Macedonian (mk), Yoruba (yo)
+- **183,603 target pairs** (same speaker, same language)
+- **407,725 nontarget pairs** (same speaker, different languages)
+
+This evaluation measures cross-lingual speaker consistency: how well the language embeddings distinguish between a speaker's utterances in the same language versus different languages.
+
+
+
 
 **Trials file** (`data/trials/verification_trials.txt`):
 ```
@@ -177,14 +186,14 @@ id011063/ab/ab_40923086.wav         id011063/de/de_40804419.wav         nontarge
 ...
 ```
 
-Where **label** is "target" (same speaker) or "nontarget" (different speaker).
+Where **label** is "target" (same language) or "nontarget" (different language).
 
 ### Model Architecture
 
 ```
 Audio Input (16kHz, ~4 seconds)
         ↓
-Wav2Vec2-Large [layers 0-24]
+Wav2Vec2-Large
         ↓
 Extract Layers 17-24 (1024D each)
         ↓
@@ -242,52 +251,14 @@ ArcFace Classifier
 
 ## Understanding Results
 
-### Log Files
 
-After training, check the checkpoint folder for:
-
-1. **val_acc.log**: Classification accuracy on flag=2 (new speakers)
-   ```
-   Epoch 0: macro_acc=65.23, micro_acc=78.15
-   Epoch 1: macro_acc=72.45, micro_acc=81.23
-   ...
-   ```
-
-2. **val_crosslingual_acc.log**: Accuracy on flag=3 (cross-lingual)
-   ```
-   Epoch 0: macro_acc=32.11, micro_acc=45.67
-   Epoch 1: macro_acc=38.92, micro_acc=52.34
-   ...
-   ```
-
-3. **lang_recognition_eer.log**: Language recognition EER (flag=2 pairs)
-   ```
-   Epoch 0: eer=22.34%
-   Epoch 1: eer=18.92%
-   ...
-   ```
-
-4. **verification_eer.log**: Speaker verification EER (language_verification_trials.txt)
-   ```
-   Epoch 0: eer=37.23%
-   Epoch 1: eer=32.15%
-   ...
-   ```
 
 ### Interpreting Metrics
 
 - **Classification Accuracy**: Higher is better (aim for >85% macro accuracy on flag=2)
-- **Cross-lingual Accuracy**: Shows generalization to new languages (often lower than classification accuracy)
-- **Language Recognition EER**: Lower is better (aim for <15% EER for easy language pairs)
-- **Speaker Verification EER**: Lower is better (typically 20-40% depending on data and speaker similarity)
+- **Language Recognition EER**: Lower is better 
 
-### EER (Equal Error Rate) Explanation
 
-EER occurs where False Positive Rate (FPR) = False Negative Rate (FNR):
-- **FPR**: Incorrectly accepting non-matching pairs (false alarms)
-- **FNR**: Incorrectly rejecting matching pairs (misses)
-
-Lower EER = Better performance at perfect balance.
 
 ## Evaluation
 
@@ -298,117 +269,23 @@ export DATASET_ROOTS="/path/to/audio/data"
 bash eval.sh 64 15 0.3 30.0 512 verification_trials.txt 0 64600
 ```
 
-### Evaluation Output
-
-The evaluation script will:
-1. Search for checkpoints in the default location
-2. Load best_checkpoint.pt (highest validation accuracy)
-3. Extract 256D embeddings for all utterances in the trials file
-4. Compute cosine similarity between all trial pairs
-5. Compute EER, minDCR, and other metrics
-6. Display results with ROC and DET curves (if matplotlib available)
-
-### Embedding Cache
-
-Evaluation caches embeddings to `embeddings_cache.pkl` for faster re-evaluation.
-
-## Advanced Usage
-
-### Using Different Data
-
-To use your own data:
-1. Create a manifest file in format: `flag\tfile_path\tlanguage`
-2. Prepare audio files in the same structure
-3. Update `data/manifests/training_manifest.txt` or create a new one
-4. Run training with the new manifest:
-   ```bash
-   python main_train.py --unified_manifest /path/to/new_manifest.txt \
-                        --dataset_roots /path/to/audio/folder1 /path/to/audio/folder2 \
-                        --trials_file /path/to/trials.txt \
-                        ...
-   ```
-
-### Using Different Audio Length
-
-By default, audio is processed as 64600 samples (~4.04 seconds at 16kHz). To use different lengths:
-
-```bash
-# Training: automatically uses 64600 samples
-bash train.sh 0
-
-# Evaluation: specify audio length (in samples)
-bash eval.sh 64 15 0.3 30.0 512 verification_trials.txt 0 160000  # ~10 seconds
-```
-
-### Training on CPU
-
-```bash
-CUDA_VISIBLE_DEVICES="" python main_train.py \
-    --unified_manifest data/manifests/training_manifest.txt \
-    --dataset_roots /path/to/audio/data \
-    --trials_file data/trials/verification_trials.txt \
-    --gpu -1
-```
-
-## Troubleshooting
-
-See [SETUP.md](SETUP.md#troubleshooting) for common setup issues.
-
-### Training is slow
-
-1. **Check GPU utilization**: `nvidia-smi`
-2. **Reduce validation frequency**: Modify `main_train.py` to validate every N epochs instead of every epoch
-3. **Use mixed precision**: Add `--use_amp` flag (requires PyTorch 1.6+)
-4. **Increase batch size**: `bash train.sh 0 128` (if GPU memory allows)
-
-### Low accuracy on cross-lingual data
-
-This is expected - the model is trained on new speakers only, so it may not generalize well to known speakers. To improve:
-1. Include flag=3 samples in training (modify manifest to use flag=1 for all data)
-2. Increase model capacity (larger hidden_dim)
-3. Train for more epochs
-4. Use different data augmentation strategies
-
-### Evaluation EER different from training EER
-
-This is normal! Reasons:
-- **Training EER**: Uses epoch_XXX.pt checkpoint (current epoch during training)
-- **Evaluation EER**: Uses best_checkpoint.pt (best validation accuracy checkpoint)
-- Different checkpoints have different performance on the same trials
-
-To match them, either:
-1. Evaluate using epoch checkpoints
-2. Or re-train the best checkpoint and evaluate
-
-## References
-
-- **Wav2Vec2**: [Baevski et al., 2020](https://arxiv.org/abs/2006.11477) - Self-supervised speech representation learning
-- **ArcFace**: [Deng et al., 2019](https://arxiv.org/abs/1801.07698) - Additive angular margin loss for deep face recognition
-- **EER**: [Martin et al., 1997](http://www.itl.nist.gov/iad/894.01/tests/sre/1997/speech_rec_eval_plan-97.txt) - NIST speaker recognition evaluation
-
-## License
-
-Please see LICENSE file (if included) or contact authors for licensing information.
 
 ## Citation
 
 If you use this toolbox in your research, please cite:
 
 ```bibtex
-@misc{tidylang-baseline,
-  title={TidyLang-Baseline: Language Identification with Wav2Vec2 and ArcFace},
-  author={[Your Name]},
-  year={2024},
-  howpublished={\url{https://github.com/[your-repo]/tidylang-baseline}}
+@misc{farhadi2026tidy,
+      title={TidyVoice: A Curated Multilingual Dataset for Speaker Verification Derived from Common Voice}, 
+      author={Aref Farhadipour and Jan Marquenie and Srikanth Madikeri and Eleanor Chodroff},
+      year={2026},
+      eprint={2601.16358},
+      archivePrefix={arXiv},
+      primaryClass={eess.AS},
+      url={https://arxiv.org/abs/2601.16358}, 
 }
 ```
 
-## Support
 
-For issues or questions:
-1. Check [SETUP.md](SETUP.md#troubleshooting) for common problems
-2. Review training logs in `ckpt_lid/` folder
-3. Verify data paths and manifest file format
-4. Check GPU memory with `nvidia-smi`
 
 **For help and technical support, please email**: aref.farhadipour@uzh.ch
