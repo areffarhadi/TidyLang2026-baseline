@@ -2,7 +2,7 @@
 
 **Official Baseline for the TidyLang 2026 Challenge - Odyssey 2026**
 
-A complete toolbox for training and evaluating a Language Identification (LID) model using Wav2Vec2 (Layers 17-24) + Simple Projection Head + ArcFace Loss. This baseline demonstrates the recommended approach and achieves strong baseline performance on the TidyLang challenge dataset.
+A complete toolbox for training and evaluating a Language Identification (LID) model using Wav2Vec2 + Simple Projection Head + ArcFace Loss. 
 
 ## Challenge Information
 
@@ -13,35 +13,6 @@ For challenge details, rules, and submission guidelines, please visit the offici
 
 
 
-## Directory Structure
-
-```
-TidyLang-baseline/
-├── README.md                              # Main documentation
-├── SETUP.md                               # Setup and installation guide
-├── requirements.txt                       # Python dependencies
-├── losses.py                              # ArcFace loss implementation
-├── main_train.py                          # Training script
-├── train.sh                               # Training wrapper (bash)
-├── eval.py                                # Evaluation script
-├── eval.sh                                # Evaluation wrapper (bash)
-├── verify_epoch.py                        # Verification during training
-│
-├── data/
-│   ├── manifests/
-│   │   └── training_manifest.txt          # 320K utterances with flags
-│   └── trials/
-│       └── trials_val_lang.txt        # 591K trial pairs for verification
-│
-└── ckpt_lid/                              # Checkpoints (created during training)
-    └── lid_layers17-24_simplehead_bs64_ep15_m0.3_s30.0_h512_w2vLarge/
-        ├── best_checkpoint.pt
-        ├── epoch_0.pt
-        ├── val_acc.log
-        ├── val_crosslingual_acc.log
-        ├── lang_recognition_eer.log
-        └── verification_eer.log
-```
 
 ## Quick Start
 
