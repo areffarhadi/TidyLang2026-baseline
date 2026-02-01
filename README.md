@@ -31,7 +31,7 @@ TidyLang-baseline/
 │   ├── manifests/
 │   │   └── training_manifest.txt          # 320K utterances with flags
 │   └── trials/
-│       └── verification_trials.txt        # 591K trial pairs for verification
+│       └── trials_val_lang.txt        # 591K trial pairs for verification
 │
 └── ckpt_lid/                              # Checkpoints (created during training)
     └── lid_layers17-24_simplehead_bs64_ep15_m0.3_s30.0_h512_w2vLarge/
@@ -165,28 +165,50 @@ The model trains on flag=1 data only. After each epoch, it validates on both fla
 
 ### Verification Trials
 
-The verification trials file (`data/trials/verification_trials.txt`) contains **591,328 trial pairs** used for language recognition evaluation. These trials test the model's ability to determine whether two utterances are in the same language or different languages.
+The verification trials file (`data/trials/trials_val_lang.txt`) contains trial pairs for evaluating both **language verification** and **speaker verification** performance. The trials use multilingual speakers to create a comprehensive evaluation across 4 distinct categories.
 
 **Trial Composition:**
 - **16 multilingual speakers** (speakers who recorded in multiple languages)
 - **5 languages**: Abkhazian (ab), Hausa (ha), Upper Sorbian (hsb), Macedonian (mk), Yoruba (yo)
-- **183,603 target pairs** (same speaker, same language)
-- **407,725 nontarget pairs** (same speaker, different languages)
 
-This evaluation measures cross-lingual speaker consistency: how well the language embeddings distinguish between a speaker's utterances in the same language versus different languages.
+**Four Types of Trial Pairs:**
 
+The trial pairs are organized into 4 categories based on whether the speaker and language match:
 
+| Category | Speaker | Language | Label | Purpose |
+|----------|---------|----------|-------|---------|
+| **Type 1** | Same | Same | `target` | Within-speaker, within-language verification |
+| **Type 2** | Different | Same | `target` | Cross-speaker, within-language verification |
+| **Type 3** | Same | Different | `nontarget` | Within-speaker, cross-lingual discrimination |
+| **Type 4** | Different | Different | `nontarget` | Cross-speaker, cross-lingual discrimination |
 
+**Current Trial File Statistics:**
+- **183,603 target pairs** (same speaker, same language only - Type 1)
+- **407,725 nontarget pairs** (different speakers, different languages only - Type 4)
 
-**Trials file** (`data/trials/verification_trials.txt`):
+**Note**: The current `trials_val_lang.txt` only includes Type 1 and Type 4 pairs. To evaluate robustness across all scenarios, you can generate trials with all 4 types using the `generate_trial_pairs.py` script:
+
+```bash
+# Generate comprehensive trials with all 4 types
+python generate_trial_pairs.py --output comprehensive_trials.txt \
+    --same-lang-same-spk 50000 \    # Type 1: target
+    --same-lang-diff-spk 50000 \    # Type 2: target
+    --diff-lang-same-spk 50000 \    # Type 3: nontarget
+    --diff-lang-diff-spk 50000      # Type 4: nontarget
+```
+
+**Trials file format** (`data/trials/trials_val_lang.txt`):
 ```
 utt1                                utt2                                label
 id011063/ab/ab_40923086.wav         id011063/ab/ab_40766731.wav         target
-id011063/ab/ab_40923086.wav         id011063/de/de_40804419.wav         nontarget
+id011063/ab/ab_40923086.wav         id010652/ha/ha_44103062.wav         nontarget
 ...
 ```
 
-Where **label** is "target" (same language) or "nontarget" (different language).
+**Evaluation Insights:**
+- **Type 1 + Type 2 (same language)**: Tests language recognition within the same language (should be high similarity)
+- **Type 3 (same speaker, different languages)**: Tests if model can distinguish languages from the same speaker (crucial for language ID on multilingual speakers)
+- **Type 4 (different speaker, different languages)**: Tests discrimination when both speaker and language differ (easiest case)
 
 ### Model Architecture
 
@@ -227,7 +249,7 @@ ArcFace Classifier
    - **Classification Accuracy (flag=2)**: Macro/Micro accuracy on new speakers
    - **Cross-lingual Accuracy (flag=3)**: Accuracy on known speakers in different languages
    - **Language Recognition EER**: Using flag=2 data, create same-language vs different-language pairs, compute EER
-   - **Speaker Verification EER**: Using language_verification_trials.txt, compute same-speaker vs different-speaker EER
+   - **Speaker Verification EER**: Using trials_val_lang.txt, compute same-speaker vs different-speaker EER
 
 3. **Checkpointing**:
    - Save best_checkpoint.pt (highest validation macro accuracy)
@@ -266,7 +288,7 @@ ArcFace Classifier
 
 ```bash
 export DATASET_ROOTS="/path/to/audio/data"
-bash eval.sh 64 15 0.3 30.0 512 verification_trials.txt 0 64600
+bash eval.sh 64 15 0.3 30.0 512 trials_val_lang.txt 0 64600
 ```
 
 

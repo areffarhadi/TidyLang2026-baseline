@@ -27,7 +27,7 @@ fi
 # ===== CONFIGURATION (Hardcoded paths) =====
 DATASET_ROOTS="./TidyVoiceX_Train ./TidyVoiceX_Dev"
 CHECKPOINT_DIR="./ckpt_lid/lid_layers17-24_simplehead_bs64_ep15_m0.3_s30.0_h512_w2vLarge"
-TRIALS_FILE="verification_trials.txt"
+TRIALS_FILE="trials_val_lang.txt"
 BATCH_SIZE=64
 NUM_EPOCHS=15
 ARCFACE_MARGIN=0.3
