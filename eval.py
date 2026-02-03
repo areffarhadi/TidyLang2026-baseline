@@ -1,15 +1,19 @@
 """
-Language Identification Embedding Extraction and Verification
-==============================================================
+Language Identification — Evaluation (Identification Only)
+==========================================================
 
-Extracts 256D embeddings from trained model and computes EER/minDCR
-for language verification trials.
+Evaluates language identification (classification) on a manifest.
+No verification: uses the full model (Wav2Vec2 + head + ArcFace classifier)
+to predict language per utterance and reports micro/macro accuracy.
+
+Use eval_enrollment.sh / eval_enrollment.py for verification (unseen languages).
 
 Usage:
-    python eval_lid_simple_head.py \
-        --checkpoint_dir ./ckpt_lid/lid_layers17-24_simplehead_bs64_ep15_m0.3_s30.0_h512_w2vLarge \
-        --trials_file language_verification_trials.txt \
-        --dataset_roots CV_datasets_wav/multilingual_lists2/TidyVoiceX_Train CV_datasets_wav/multilingual_lists2/TidyVoiceX_Dev \
+    python eval.py \
+        --checkpoint_dir ./ckpt_lid/... \
+        --manifest_file data/manifests/training_manifest.txt \
+        --dataset_roots /path/to/TidyVoiceX_Train /path/to/TidyVoiceX_Dev \
+        --split_flag 2 \
         --gpu 0
 """
 
@@ -20,135 +24,84 @@ import argparse
 import os
 import json
 import numpy as np
-import math
-from transformers import Wav2Vec2Model, Wav2Vec2FeatureExtractor, Wav2Vec2Config
+from transformers import Wav2Vec2Model, Wav2Vec2FeatureExtractor
 import torchaudio
 from tqdm import tqdm
-from scipy.optimize import brentq
-from scipy.interpolate import interp1d
 from collections import defaultdict
-import pickle
+from sklearn.metrics import confusion_matrix
 
 torch.set_default_dtype(torch.float32)
 
+# Import ArcFace for the classifier head
+from losses import ArcFaceLoss
+
 
 class Wav2VecLayerExtractor(nn.Module):
-    """Extract and aggregate features from Wav2Vec2 layers 17-24."""
+    """Extract and aggregate features from Wav2Vec2 layers 17-24 (matches main_train)."""
 
     def __init__(self, model_name="facebook/wav2vec2-large"):
         super().__init__()
         self.processor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
         self.model = Wav2Vec2Model.from_pretrained(model_name)
-
-        # Freeze the model
         for param in self.model.parameters():
             param.requires_grad = False
-
-        # Layer indices for layers 17-24
         self.layer_indices = list(range(17, 25))
-        
-        # Learnable weights for aggregation
         self.layer_weights = nn.Parameter(torch.ones(len(self.layer_indices)))
 
-    def forward(self, waveforms):
-        """
-        Args:
-            waveforms: (B, T) audio waveforms at 16kHz
-
-        Returns:
-            aggregated: (B, T, 1024) aggregated features from layers 17-24
-        """
-        # Convert tensor to numpy for processor
-        if isinstance(waveforms, torch.Tensor):
-            waveforms_np = waveforms.cpu().numpy()
-        else:
-            waveforms_np = waveforms
-        
-        # Extract features - processor expects numpy arrays
-        inputs = self.processor(
-            waveforms_np, 
-            sampling_rate=16000, 
-            return_tensors="pt", 
-            padding=True
-        )
-        
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-        
+    def forward(self, audio_data):
+        feat = self.processor(
+            audio_data, sampling_rate=16000, return_tensors="pt"
+        ).input_values.to(audio_data.device)
+        if feat.dim() == 3:
+            feat = feat.squeeze(0)
         with torch.no_grad():
-            outputs = self.model(**inputs, output_hidden_states=True)
-        
-        # Get hidden states
-        hidden_states = outputs.hidden_states
-        
-        # Extract specified layers
-        layer_outputs = [hidden_states[idx] for idx in self.layer_indices]
-        
-        # Aggregate with learned weights
+            outputs = self.model(feat, output_hidden_states=True, return_dict=True)
+        layer_outputs = [outputs.hidden_states[idx] for idx in self.layer_indices]
         weights = F.softmax(self.layer_weights, dim=0)
         aggregated = sum(w * layer_out for w, layer_out in zip(weights, layer_outputs))
-        
         return aggregated
 
 
 class SimpleProjectionHead(nn.Module):
-    """Simple Projection Head for Language Identification."""
+    """Simple Projection Head (matches main_train)."""
 
-    def __init__(
-        self,
-        input_dim=1024,
-        hidden_dim=512,
-        embedding_dim=256,
-        dropout=0.1,
-    ):
+    def __init__(self, input_dim=1024, hidden_dim=512, embedding_dim=256, dropout=0.1):
         super().__init__()
-
         self.projection = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, embedding_dim),
-            nn.LayerNorm(embedding_dim)
+            nn.LayerNorm(embedding_dim),
         )
 
     def forward(self, x, normalize=False):
-        """
-        Args:
-            x: (B, T, input_dim) - sequence of features
-            normalize: whether to L2 normalize embeddings
-
-        Returns:
-            embeddings: (B, embedding_dim)
-        """
-        # Mean pooling over time dimension
-        pooled = x.mean(dim=1)  # (B, input_dim)
-
-        # Project to embedding
-        embeddings = self.projection(pooled)  # (B, embedding_dim)
-
+        pooled = x.mean(dim=1)
+        embeddings = self.projection(pooled)
         if normalize:
             embeddings = F.normalize(embeddings, p=2, dim=1)
-
         return embeddings
 
 
-class LIDModel(nn.Module):
-    """Language ID Model for embedding extraction."""
+class LanguageIDModel(nn.Module):
+    """End-to-end Language Identification model (matches main_train)."""
 
     def __init__(
         self,
+        num_languages,
         ssl_model="facebook/wav2vec2-large",
         embedding_dim=256,
         hidden_dim=512,
+        arcface_margin=0.3,
+        arcface_scale=30.0,
         device="cuda",
     ):
         super().__init__()
-
+        self.num_languages = num_languages
         self.device = device
-
         self.wav2vec_layer24 = Wav2VecLayerExtractor(model_name=ssl_model)
         self.wav2vec_layer24 = self.wav2vec_layer24.to(device)
-
         self.head = SimpleProjectionHead(
             input_dim=1024,
             hidden_dim=hidden_dim,
@@ -156,176 +109,95 @@ class LIDModel(nn.Module):
             dropout=0.1,
         )
         self.head = self.head.to(device)
+        self.arcface = ArcFaceLoss(
+            in_features=embedding_dim,
+            out_features=num_languages,
+            margin=arcface_margin,
+            scale=arcface_scale,
+        )
+        self.arcface = self.arcface.to(device)
 
-    def extract_embedding(self, waveforms, return_unnormalized=False):
-        """
-        Extract normalized embeddings.
-        
-        Args:
-            waveforms: (B, T) or (T,) audio waveforms
-            return_unnormalized: If True, also return unnormalized embeddings
-            
-        Returns:
-            embeddings: (B, 256) normalized embeddings
-            Or: (normalized, unnormalized) if return_unnormalized=True
-        """
-        if waveforms.dim() == 1:
-            waveforms = waveforms.unsqueeze(0)
-        
-        # Extract features
+    def forward(self, waveforms, labels=None):
         feat = self.wav2vec_layer24(waveforms)
-
-        # Get normalized embeddings
-        embeddings_norm = self.head(feat, normalize=True)
-        
-        if return_unnormalized:
-            embeddings_unnorm = self.head(feat, normalize=False)
-            return embeddings_norm, embeddings_unnorm
-        else:
-            return embeddings_norm
+        emb_norm = self.head(feat, normalize=True)
+        if labels is not None:
+            loss, logits = self.arcface(emb_norm, labels)
+            return emb_norm, logits, loss
+        logits = self.arcface.forward_inference(emb_norm)
+        return emb_norm, logits
 
 
-def load_audio(file_path, sr=16000, audio_len=64600):
-    """Load and process audio file."""
+def load_manifest(manifest_file, dataset_roots, split_flag=None, language_to_idx=None):
+    """
+    Load manifest: tab-separated flag, file_path, language.
+    Returns list of (file_path, language_idx), language_to_idx, idx_to_language.
+    """
+    samples = []
+    language_set = set()
+    with open(manifest_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            flag, file_path, language = parts
+            if split_flag is not None and flag != str(split_flag):
+                continue
+            language_set.add(language)
+            samples.append((file_path, language))
+    if language_to_idx is None:
+        language_to_idx = {lang: idx for idx, lang in enumerate(sorted(language_set))}
+    idx_to_language = {idx: lang for lang, idx in language_to_idx.items()}
+    # Filter samples to languages in language_to_idx and convert to indices
+    out = []
+    for file_path, language in samples:
+        if language not in language_to_idx:
+            continue
+        out.append((file_path, language_to_idx[language]))
+    return out, language_to_idx, idx_to_language
+
+
+def load_audio(file_path, dataset_roots, sr=16000, audio_len=64600):
+    """Load and process audio file from dataset roots."""
+    full_path = None
+    for root in dataset_roots:
+        potential = os.path.join(root, file_path)
+        if os.path.exists(potential):
+            full_path = potential
+            break
+    if full_path is None:
+        return None
     try:
-        waveform, file_sr = torchaudio.load(file_path)
-        
-        # Ensure shape is [channels, samples]
+        waveform, file_sr = torchaudio.load(full_path)
         if waveform.ndim > 2:
             waveform = waveform.squeeze()
-        
-        # Convert to mono if needed
         if waveform.ndim == 2:
-            if waveform.shape[0] > 1:
-                # Multiple channels - take mean
-                waveform = torch.mean(waveform, dim=0)
-            else:
-                # Single channel - squeeze
-                waveform = waveform.squeeze(0)
-        
-        # Resample if needed
+            waveform = torch.mean(waveform, dim=0) if waveform.shape[0] > 1 else waveform.squeeze(0)
         if file_sr != sr:
             resampler = torchaudio.transforms.Resample(file_sr, sr)
             waveform = resampler(waveform)
-        
-        # Ensure 1D
         waveform = waveform.squeeze()
-        
-        # Pad or trim to required length
         if len(waveform) < audio_len:
-            pad_amount = audio_len - len(waveform)
-            waveform = torch.nn.functional.pad(waveform, (0, pad_amount))
+            waveform = F.pad(waveform, (0, audio_len - len(waveform)))
         else:
             waveform = waveform[:audio_len]
-        
         return waveform
-    
-    except Exception as e:
-        print(f"Error loading {file_path}: {e}")
+    except Exception:
         return None
 
 
-def compute_eer(y_true, y_score):
-    """
-    Compute Equal Error Rate (EER).
-    
-    Args:
-        y_true: Ground truth labels (1 = target/same, 0 = non-target/different)
-        y_score: Similarity scores
-        
-    Returns:
-        eer: Equal Error Rate
-        threshold: Threshold at EER
-    """
-    fpr, fnr, thresholds = compute_error_rates(y_true, y_score)
-    
-    # Find threshold where FPR == FNR
-    eer_idx = np.nanargmin(np.abs(fpr - fnr))
-    eer = (fpr[eer_idx] + fnr[eer_idx]) / 2.0
-    threshold = thresholds[eer_idx]
-    
-    return eer, threshold
-
-
-def compute_error_rates(y_true, y_score):
-    """Compute FPR and FNR efficiently using sorted scores (O(n log n))."""
-    # Sort scores in descending order
-    sorted_indices = np.argsort(-y_score)
-    y_sorted = y_true[sorted_indices]
-    scores_sorted = y_score[sorted_indices]
-    
-    # Number of targets and non-targets
-    n_targets = np.sum(y_true == 1)
-    n_non_targets = np.sum(y_true == 0)
-    
-    # Initialize: at threshold = infinity, all predictions are 0 (accept nothing)
-    # FP = 0 (no false positives - no non-targets accepted)
-    # FN = n_targets (all targets are false negatives - rejected)
-    fpr_list = [0.0]  # FP = 0, so FPR = 0
-    fnr_list = [1.0]  # FN = n_targets, so FNR = 1
-    threshold_list = [np.inf]
-    
-    # Track cumulative false positives and false negatives
-    fp = 0              # Start with 0 false positives
-    fn = n_targets      # Start with all targets as false negatives
-    
-    # Iterate through sorted scores (from highest to lowest)
-    for i in range(len(y_sorted)):
-        if y_sorted[i] == 1:  # Target
-            fn -= 1  # Accept a target, so decrease false negatives
-        else:  # Non-target
-            fp += 1  # Accept a non-target, so increase false positives
-        
-        # Compute rates
-        fpr = fp / n_non_targets if n_non_targets > 0 else 0
-        fnr = fn / n_targets if n_targets > 0 else 0
-        
-        fpr_list.append(fpr)
-        fnr_list.append(fnr)
-        threshold_list.append(scores_sorted[i])
-    
-    return np.array(fpr_list), np.array(fnr_list), np.array(threshold_list)
-
-
-def compute_mindcr(y_true, y_score, target_prior=0.01):
-    """
-    Compute minimum Detection Cost Rate (minDCR).
-    
-    Args:
-        y_true: Ground truth labels (1 = target, 0 = non-target)
-        y_score: Similarity scores
-        target_prior: Prior probability of target (default 0.01)
-        
-    Returns:
-        mindcr: Minimum Detection Cost Rate
-        threshold: Threshold at minDCR
-    """
-    fpr, fnr, thresholds = compute_error_rates(y_true, y_score)
-    
-    # Cost function: DCR = target_prior * fnr + (1 - target_prior) * fpr
-    dcr = target_prior * fnr + (1 - target_prior) * fpr
-    
-    mindcr_idx = np.nanargmin(dcr)
-    mindcr = dcr[mindcr_idx]
-    threshold = thresholds[mindcr_idx]
-    
-    return mindcr, threshold
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Language Identification Embedding Extraction and Evaluation")
-    
-    parser.add_argument(
-        "--checkpoint_dir",
-        type=str,
-        required=True,
-        help="Path to checkpoint directory",
+    parser = argparse.ArgumentParser(
+        description="Language Identification — Evaluation (identification only)"
     )
+    parser.add_argument("--checkpoint_dir", type=str, required=True, help="Checkpoint directory")
     parser.add_argument(
-        "--trials_file",
+        "--manifest_file",
         type=str,
         required=True,
-        help="Path to trials file (format: wav1 wav2 label)",
+        help="Manifest file (tab-separated: flag, file_path, language)",
     )
     parser.add_argument(
         "--dataset_roots",
@@ -335,272 +207,153 @@ def main():
         help="Dataset root directories",
     )
     parser.add_argument(
-        "--gpu",
-        type=int,
-        default=0,
-        help="GPU ID",
+        "--split_flag",
+        type=str,
+        default="2",
+        help="Use only lines with this flag (default: 2 = validation)",
     )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=32,
-        help="Batch size for embedding extraction",
-    )
+    parser.add_argument("--gpu", type=int, default=0, help="GPU ID")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
     parser.add_argument(
         "--audio_len",
         type=int,
         default=64600,
-        help="Audio length in samples (default: 64600 = ~4 sec at 16kHz, try 160000 for ~10 sec)",
+        help="Audio length in samples (~4 s at 16 kHz)",
     )
-    parser.add_argument(
-        "--cache_embeddings",
-        action="store_true",
-        help="Cache embeddings to disk",
-    )
-    
     args = parser.parse_args()
-    
-    # Set random seeds for reproducibility
-    torch.manual_seed(42)
-    np.random.seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
-    
-    # Set device
+
     device = f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}\n")
-    
-    # Load checkpoint metadata
-    args_file = os.path.join(args.checkpoint_dir, "args.json")
-    with open(args_file, 'r') as f:
-        ckpt_args = json.load(f)
-    
-    print("Loading model...")
-    model = LIDModel(
-        ssl_model=ckpt_args['ssl_model'],
-        embedding_dim=ckpt_args['embedding_dim'],
-        hidden_dim=ckpt_args.get('hidden_dim', 512),
+
+    checkpoint_dir = args.checkpoint_dir
+    # Load language mapping from checkpoint (idx -> language code)
+    lang_map_path = os.path.join(checkpoint_dir, "language_mapping.json")
+    if not os.path.exists(lang_map_path):
+        raise FileNotFoundError(
+            f"Language mapping not found: {lang_map_path}. Train with main_train.py first."
+        )
+    with open(lang_map_path, "r") as f:
+        idx_to_language = json.load(f)
+    # JSON keys are strings; convert to int for indexing
+    idx_to_language = {int(k): v for k, v in idx_to_language.items()}
+    language_to_idx = {v: k for k, v in idx_to_language.items()}
+    num_languages = len(idx_to_language)
+
+    # Load manifest (only samples whose language is in the model)
+    samples, _, _ = load_manifest(
+        args.manifest_file,
+        args.dataset_roots,
+        split_flag=args.split_flag,
+        language_to_idx=language_to_idx,
+    )
+    if not samples:
+        raise ValueError(
+            f"No samples found in manifest for split_flag={args.split_flag} "
+            f"with languages in checkpoint."
+        )
+    print(f"Loaded {len(samples)} samples from manifest (split_flag={args.split_flag})\n")
+
+    # Load checkpoint
+    checkpoint_path = os.path.join(checkpoint_dir, "best_checkpoint.pt")
+    if not os.path.exists(checkpoint_path):
+        checkpoint_path = os.path.join(checkpoint_dir, "best_model.pt")
+    if not os.path.exists(checkpoint_path):
+        ckpt_files = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
+        if ckpt_files:
+            checkpoint_path = os.path.join(checkpoint_dir, sorted(ckpt_files)[-1])
+        else:
+            raise FileNotFoundError(f"No checkpoint found in {checkpoint_dir}")
+    ckpt = torch.load(checkpoint_path, map_location=device)
+    state_dict = ckpt.get("model_state_dict", ckpt)
+    num_languages_from_ckpt = state_dict["arcface.weight"].shape[0]
+    if num_languages_from_ckpt != num_languages:
+        num_languages = num_languages_from_ckpt
+        idx_to_language = {i: str(i) for i in range(num_languages)}
+        if os.path.exists(lang_map_path):
+            with open(lang_map_path, "r") as f:
+                idx_to_language = {int(k): v for k, v in json.load(f).items()}
+
+    args_file = os.path.join(checkpoint_dir, "args.json")
+    ckpt_args = {}
+    if os.path.exists(args_file):
+        with open(args_file, "r") as f:
+            ckpt_args = json.load(f)
+    model = LanguageIDModel(
+        num_languages=num_languages,
+        ssl_model=ckpt_args.get("ssl_model", "facebook/wav2vec2-large"),
+        embedding_dim=ckpt_args.get("embedding_dim", 256),
+        hidden_dim=ckpt_args.get("hidden_dim", 512),
+        arcface_margin=ckpt_args.get("arcface_margin", 0.3),
+        arcface_scale=ckpt_args.get("arcface_scale", 30.0),
         device=device,
     )
-    
-    # Load checkpoint
-    checkpoint_path = os.path.join(args.checkpoint_dir, "best_model.pt")
-    if not os.path.exists(checkpoint_path):
-        # Try to find latest checkpoint
-        ckpt_files = [f for f in os.listdir(args.checkpoint_dir) if f.endswith('.pt')]
-        if ckpt_files:
-            checkpoint_path = os.path.join(args.checkpoint_dir, sorted(ckpt_files)[-1])
-        else:
-            raise FileNotFoundError(f"No checkpoint found in {args.checkpoint_dir}")
-    
-    print(f"Loading checkpoint from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint, strict=False)
+    model.load_state_dict(state_dict, strict=True)
     model.eval()
-    
-    # Disable dropout layers for deterministic inference
     for module in model.modules():
         if isinstance(module, nn.Dropout):
             module.p = 0.0
-    
-    print("Reading trials file...")
-    trials = []
-    trial_labels = defaultdict(list)
-    
-    with open(args.trials_file, 'r') as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 3:
-                wav1, wav2, label = parts[0], parts[1], parts[2]
-                trials.append((wav1, wav2, label))
-                trial_labels[label].append(len(trials) - 1)
-    
-    print(f"Loaded {len(trials)} trials")
-    print(f"Target trials: {len(trial_labels.get('target', []))}")
-    print(f"Non-target trials: {len(trial_labels.get('nontarget', []))}")
-    
-    # Extract all unique audio files
-    unique_audios = set()
-    for wav1, wav2, _ in trials:
-        unique_audios.add(wav1)
-        unique_audios.add(wav2)
-    unique_audios = sorted(list(unique_audios))
-    
-    print(f"\nExtracting embeddings for {len(unique_audios)} unique audio files...")
-    
-    # Cache embeddings
-    embeddings_cache = {}
-    
-    # Batch processing
+    print(f"Model loaded from {checkpoint_path}\n")
+
+    # Evaluate in batches
+    all_preds = []
+    all_labels = []
     batch_size = args.batch_size
-    
-    with torch.no_grad():
-        for batch_start in tqdm(range(0, len(unique_audios), batch_size), desc="Extracting (batched)"):
-            batch_end = min(batch_start + batch_size, len(unique_audios))
-            batch_files = unique_audios[batch_start:batch_end]
-            
-            # Load batch of audio files
-            batch_waveforms = []
-            batch_file_indices = []
-            
-            for file_idx, audio_file in enumerate(batch_files):
-                # Find audio in dataset roots
-                full_path = None
-                for root in args.dataset_roots:
-                    potential_path = os.path.join(root, audio_file)
-                    if os.path.exists(potential_path):
-                        full_path = potential_path
-                        break
-                
-                if full_path is None:
-                    embeddings_cache[audio_file] = None
-                    continue
-                
-                # Load audio
-                waveform = load_audio(full_path, audio_len=args.audio_len)
-                if waveform is None:
-                    embeddings_cache[audio_file] = None
-                    continue
-                
-                batch_waveforms.append(waveform)
-                batch_file_indices.append((file_idx, audio_file))
-            
-            if not batch_waveforms:
+    num_skipped = 0
+    for start in tqdm(range(0, len(samples), batch_size), desc="Evaluating"):
+        batch_samples = samples[start : start + batch_size]
+        waveforms = []
+        labels_b = []
+        for file_path, lang_idx in batch_samples:
+            wav = load_audio(
+                file_path, args.dataset_roots, audio_len=args.audio_len
+            )
+            if wav is None:
+                num_skipped += 1
                 continue
-            
-            # Pad batch to same length
-            max_len = max(len(w) for w in batch_waveforms)
-            padded_batch = []
-            for w in batch_waveforms:
-                if len(w) < max_len:
-                    w = torch.nn.functional.pad(w, (0, max_len - len(w)))
-                padded_batch.append(w)
-            
-            batch_tensor = torch.stack(padded_batch).to(device)  # (B, T)
-            
-            # Extract embeddings
-            batch_embeddings = model.extract_embedding(batch_tensor)  # (B, 256)
-            
-            # Cache embeddings
-            for (file_idx, audio_file), embedding in zip(batch_file_indices, batch_embeddings):
-                embeddings_cache[audio_file] = embedding.cpu().numpy()  # (256,)
-    
-    # Compute and display embedding statistics
-    valid_embeddings = np.array([e for e in embeddings_cache.values() if e is not None])
-    
-    print(f"\nSuccessfully extracted embeddings for {len(valid_embeddings)} files")
-    
-    if len(valid_embeddings) > 0:
-        print("\nEmbedding Statistics (256D):")
-        print(f"  Mean embedding norm: {np.linalg.norm(valid_embeddings, axis=1).mean():.4f}")
-        print(f"  Std embedding norm: {np.linalg.norm(valid_embeddings, axis=1).std():.4f}")
-        print(f"  Mean dimension value: {valid_embeddings.mean():.6f}")
-        print(f"  Std dimension value: {valid_embeddings.std():.6f}")
-        print(f"  Min dimension value: {valid_embeddings.min():.6f}")
-        print(f"  Max dimension value: {valid_embeddings.max():.6f}")
-        print(f"  Variance (per dimension):")
-        dim_vars = np.var(valid_embeddings, axis=0)
-        print(f"    Mean variance: {dim_vars.mean():.6f}")
-        print(f"    Min variance: {dim_vars.min():.6f}")
-        print(f"    Max variance: {dim_vars.max():.6f}")
-    
-    
-    # Compute scores for trials - BATCHED
-    print("\nComputing trial scores (batched)...")
-    scores = []
-    labels = []
-    
-    batch_size_scoring = 10000  # Process trials in batches
-    
-    for batch_start in tqdm(range(0, len(trials), batch_size_scoring), desc="Scoring (batched)"):
-        batch_end = min(batch_start + batch_size_scoring, len(trials))
-        batch_trials = trials[batch_start:batch_end]
-        
-        # Collect embeddings for this batch
-        batch_emb1_list = []
-        batch_emb2_list = []
-        batch_labels = []
-        valid_indices = []
-        
-        for idx, (wav1, wav2, label) in enumerate(batch_trials):
-            emb1 = embeddings_cache.get(wav1)
-            emb2 = embeddings_cache.get(wav2)
-            
-            if emb1 is None or emb2 is None:
-                continue
-            
-            batch_emb1_list.append(emb1)
-            batch_emb2_list.append(emb2)
-            batch_labels.append(1 if label == 'target' else 0)
-            valid_indices.append(idx)
-        
-        if not batch_emb1_list:
+            waveforms.append(wav)
+            labels_b.append(lang_idx)
+        if not waveforms:
             continue
-        
-        # Stack embeddings
-        batch_emb1 = np.array(batch_emb1_list)  # (N, 256)
-        batch_emb2 = np.array(batch_emb2_list)  # (N, 256)
-        
-        # Compute cosine similarities in batch
-        # Normalize embeddings
-        emb1_norm = np.linalg.norm(batch_emb1, axis=1, keepdims=True)
-        emb2_norm = np.linalg.norm(batch_emb2, axis=1, keepdims=True)
-        
-        batch_emb1_normalized = batch_emb1 / (emb1_norm + 1e-8)
-        batch_emb2_normalized = batch_emb2 / (emb2_norm + 1e-8)
-        
-        # Compute dot products (cosine similarity)
-        batch_scores = np.sum(batch_emb1_normalized * batch_emb2_normalized, axis=1)
-        
-        scores.extend(batch_scores.tolist())
-        labels.extend(batch_labels)
-    
-    scores = np.array(scores)
-    labels = np.array(labels)
-    
-    print(f"\nEvaluation on {len(scores)} trials:")
-    print(f"  Target (1) trials: {np.sum(labels == 1)}")
-    print(f"  Non-target (0) trials: {np.sum(labels == 0)}")
-    print(f"  Score range: [{scores.min():.4f}, {scores.max():.4f}]")
-    print(f"  Mean target score: {scores[labels == 1].mean():.4f}")
-    print(f"  Mean non-target score: {scores[labels == 0].mean():.4f}")
-    print(f"  Target std: {scores[labels == 1].std():.4f}")
-    print(f"  Non-target std: {scores[labels == 0].std():.4f}")
-    
-    # Compute EER
-    eer, eer_threshold = compute_eer(labels, scores)
-    print(f"\nEqual Error Rate (EER): {100 * eer:.4f}%")
-    print(f"  EER Threshold: {eer_threshold:.4f}")
-    
-    # Compute minDCR
-    mindcr, mindcr_threshold = compute_mindcr(labels, scores)
-    print(f"\nMinimum Detection Cost Rate (minDCR): {mindcr:.4f}")
-    print(f"  minDCR Threshold: {mindcr_threshold:.4f}")
-    
-    # Save results
+        waveforms = torch.stack(waveforms).to(device)
+        labels_b = torch.tensor(labels_b, dtype=torch.long, device=device)
+        with torch.no_grad():
+            _, logits = model(waveforms)
+        preds = logits.argmax(dim=1).cpu().numpy()
+        all_preds.extend(preds)
+        all_labels.extend(labels_b.cpu().numpy())
+    if num_skipped:
+        print(f"Skipped {num_skipped} samples (missing/invalid audio)\n")
+
+    all_preds = np.array(all_preds)
+    all_labels = np.array(all_labels)
+    n = len(all_labels)
+    correct = (all_preds == all_labels).sum()
+    micro_acc = 100.0 * correct / n if n else 0.0
+    # Macro: per-class accuracy averaged
+    cm = confusion_matrix(
+        all_labels, all_preds, labels=list(range(num_languages))
+    )
+    per_class_acc = np.diag(cm) / (np.sum(cm, axis=1) + 1e-10)
+    macro_acc = 100.0 * per_class_acc.mean()
+
+    print("=" * 60)
+    print("RESULTS (Identification Only)")
+    print("=" * 60)
+    print(f"  Micro Accuracy: {micro_acc:.2f}%")
+    print(f"  Macro Accuracy: {macro_acc:.2f}%")
+    print(f"  Total samples: {n}")
+    print("=" * 60)
+
     results = {
-        'eer': float(eer),
-        'eer_threshold': float(eer_threshold),
-        'mindcr': float(mindcr),
-        'mindcr_threshold': float(mindcr_threshold),
-        'num_trials': len(scores),
-        'num_target_trials': int(np.sum(labels == 1)),
-        'num_nontarget_trials': int(np.sum(labels == 0)),
-        'mean_target_score': float(scores[labels == 1].mean()),
-        'mean_nontarget_score': float(scores[labels == 0].mean()),
+        "micro_accuracy": float(micro_acc),
+        "macro_accuracy": float(macro_acc),
+        "num_samples": int(n),
+        "num_languages": num_languages,
     }
-    
-    results_file = os.path.join(args.checkpoint_dir, "verification_results.json")
-    with open(results_file, 'w') as f:
+    results_path = os.path.join(checkpoint_dir, "eval_identification_results.json")
+    with open(results_path, "w") as f:
         json.dump(results, f, indent=2)
-    
-    print(f"\nResults saved to {results_file}")
-    
-    # Optional: save scores for further analysis
-    if args.cache_embeddings:
-        scores_file = os.path.join(args.checkpoint_dir, "trial_scores.npz")
-        np.savez(scores_file, scores=scores, labels=labels, trials=unique_audios)
-        print(f"Scores saved to {scores_file}")
+    print(f"\nResults saved to {results_path}")
 
 
 if __name__ == "__main__":

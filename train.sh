@@ -39,7 +39,6 @@ HIDDEN_DIM=${6:-512}
 
 # Relative paths (relative to toolbox root)
 UNIFIED_MANIFEST="${SCRIPT_DIR}/data/manifests/training_manifest.txt"
-TRIALS_FILE="${SCRIPT_DIR}/data/trials/verification_trials.txt"
 MODEL="facebook/wav2vec2-large"
 OUTPUT_DIR="${SCRIPT_DIR}/ckpt_lid/lid_layers17-24_simplehead_bs${BATCH_SIZE}_ep${NUM_EPOCHS}_m${ARCFACE_MARGIN}_s${ARCFACE_SCALE}_h${HIDDEN_DIM}_w2vLarge"
 
@@ -55,12 +54,10 @@ echo "  - Hidden dimension: $HIDDEN_DIM"
 echo "  - ArcFace:"
 echo "      - Margin (m): $ARCFACE_MARGIN"
 echo "      - Scale (s): $ARCFACE_SCALE"
-echo "  - Verification: Language verification trials"
 echo ""
 echo "Data Paths:"
 echo "  - Manifest: $UNIFIED_MANIFEST"
 echo "  - Dataset roots: $DATASET_ROOTS"
-echo "  - Trials file: $TRIALS_FILE"
 echo ""
 echo "Output directory: $OUTPUT_DIR"
 echo ""
@@ -71,19 +68,12 @@ if [ ! -f "$UNIFIED_MANIFEST" ]; then
     exit 1
 fi
 
-# Verify trials file exists
-if [ ! -f "$TRIALS_FILE" ]; then
-    echo "ERROR: Trials file not found: $TRIALS_FILE"
-    exit 1
-fi
-
 mkdir -p "$OUTPUT_DIR"
 
 # Run training
 $PYTHON "$SCRIPT_DIR/main_train.py" \
     --unified_manifest "$UNIFIED_MANIFEST" \
     --dataset_roots $DATASET_ROOTS \
-    --trials_file "$TRIALS_FILE" \
     --ssl_model "$MODEL" \
     --batch_size "$BATCH_SIZE" \
     --num_epochs "$NUM_EPOCHS" \
@@ -99,5 +89,4 @@ echo "Training completed!"
 echo "Results saved to: $OUTPUT_DIR"
 echo ""
 echo "To evaluate the trained model:"
-echo "  export DATASET_ROOTS=\"$DATASET_ROOTS\""
-echo "  bash eval.sh $BATCH_SIZE $NUM_EPOCHS $ARCFACE_MARGIN $ARCFACE_SCALE $HIDDEN_DIM verification_trials.txt $GPU_ID"
+echo "  bash eval.sh $GPU_ID"

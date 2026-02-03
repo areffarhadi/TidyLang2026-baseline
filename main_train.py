@@ -22,7 +22,6 @@ import os
 import json
 import numpy as np
 import math
-import subprocess
 import sys
 from transformers import Wav2Vec2Model, Wav2Vec2FeatureExtractor, Wav2Vec2Config
 from torch.utils.data import Dataset, DataLoader
@@ -509,13 +508,6 @@ def main():
         required=True,
         help="Dataset root directories",
     )
-    parser.add_argument(
-        "--trials_file",
-        type=str,
-        default=None,
-        help="Path to language verification trials file for epoch-wise EER verification",
-    )
-    
     # Training arguments
     parser.add_argument(
         "--batch_size",
@@ -814,7 +806,7 @@ def main():
             )
             print(f"  ✓ Best checkpoint saved! (Val Macro: {val_acc_macro:.1f}%)")
 
-        # Save epoch checkpoint (for verification)
+        # Save epoch checkpoint
         epoch_checkpoint_path = os.path.join(args.out_fold, f"epoch_{epoch + 1:03d}.pt")
         torch.save(
             {
@@ -828,58 +820,6 @@ def main():
             },
             epoch_checkpoint_path,
         )
-        # Verification: Extract embeddings and compute EER on trials
-        if args.trials_file and os.path.exists(args.trials_file):
-            print("  Verification (language verification trials)...")
-            try:
-                # Get the python executable (same as current process)
-                python_exe = sys.executable
-                
-                # Build the command
-                cmd = [
-                    python_exe,
-                    "verify_lid_epoch.py",
-                    "--checkpoint", epoch_checkpoint_path,
-                    "--trials_file", args.trials_file,
-                    "--dataset_roots"] + args.dataset_roots + [
-                    "--output_dir", args.out_fold,
-                    "--gpu", str(args.gpu),
-                    "--ssl_model", args.ssl_model,
-                ]
-                
-                # Run verification (capture output to parse results)
-                result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd(), timeout=600)
-                
-                if result.returncode == 0:
-                    # Parse EER from output
-                    eer_found = False
-                    for line in result.stdout.split('\n'):
-                        if "Equal Error Rate (EER):" in line:
-                            print(f"  {line.strip()}")
-                            eer_found = True
-                        elif "EER Threshold:" in line:
-                            print(f"  {line.strip()}")
-                    
-                    if not eer_found:
-                        print(f"  Warning: EER not found in output")
-                        if result.stdout:
-                            print(f"  Output: {result.stdout[-300:]}")
-                else:
-                    print(f"  Warning: Verification failed (return code: {result.returncode})")
-                    # Show last part of error
-                    if result.stderr:
-                        error_lines = result.stderr.split('\n')
-                        # Filter out warnings and show actual errors
-                        error_msgs = [l for l in error_lines if l and not 'FutureWarning' in l and not 'DeprecationWarning' in l]
-                        if error_msgs:
-                            print(f"  Error: {error_msgs[-1][:300]}")
-                    if result.stdout:
-                        print(f"  Last output: {result.stdout[-200:]}")
-            except subprocess.TimeoutExpired:
-                print(f"  Warning: Verification timed out (>600s)")
-            except Exception as e:
-                print(f"  Warning: Could not run verification: {str(e)}")
-
 
         # Log results
         with open(os.path.join(args.out_fold, "val_acc.log"), "w") as f:
