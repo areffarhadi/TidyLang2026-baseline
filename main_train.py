@@ -13,6 +13,8 @@ Computes both micro and macro-averaged accuracy for each validation set after ea
 import warnings
 # Suppress FutureWarning from huggingface_hub
 warnings.filterwarnings("ignore", category=FutureWarning)
+# Suppress torchaudio deprecation warnings about TorchCodec migration
+warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 
 import torch
 import torch.nn as nn
@@ -144,7 +146,7 @@ class Wav2VecLayerExtractor(nn.Module):
         super().__init__()
 
         self.processor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
-        self.model = Wav2Vec2Model.from_pretrained(model_name)
+        self.model = Wav2Vec2Model.from_pretrained(model_name, use_safetensors=True)
 
         # Freeze the model
         for param in self.model.parameters():

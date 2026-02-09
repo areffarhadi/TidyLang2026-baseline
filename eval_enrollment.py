@@ -309,7 +309,7 @@ def main():
             raise FileNotFoundError(f"No checkpoint found in {args.checkpoint_dir}")
     
     print(f"Loading checkpoint from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint, strict=False)
     model.eval()
     

@@ -17,17 +17,17 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Python interpreter
-PYTHON="/local/scratch/arfarh/wildspoof_challenge/All-Type-ADD/add-env/bin/python"
+PYTHON="/home/rf/Qwen/qwen-envomni-stable/bin/python3"
 
 if [ ! -f "$PYTHON" ]; then
     PYTHON="python"
 fi
 
 # ===== CONFIGURATION =====
-CHECKPOINT_DIR="/local/scratch/arfarh/CV_speaker/cv_dataset/ckpt_lid/lid_layers17-24_simplehead_bs64_ep15_m0.3_s30.0_h512_w2vLarge"
-TRIALS_FILE="${SCRIPT_DIR}/data/trials/trials_Dev.txt"
-MANIFEST_FILE="${SCRIPT_DIR}/data/trials/enrollment_manifest.tsv"
-DATASET_ROOTS="/local/scratch/arfarh/CV_speaker/cv_dataset/CV_datasets_wav/multilingual_lists2/TidyVoiceX_Train /local/scratch/arfarh/CV_speaker/cv_dataset/CV_datasets_wav/multilingual_lists2/TidyVoiceX_Dev"
+CHECKPOINT_DIR="./ckpt_lid/lid_layers17-24_simplehead_bs64_ep15_m0.3_s30.0_h512_w2vLarge"
+TRIALS_FILE="${SCRIPT_DIR}/data/trials/trials_Dev_clean.txt"
+MANIFEST_FILE="${SCRIPT_DIR}/data/trials/enrollment_manifest_clean.tsv"
+DATASET_ROOTS="./TidyVoiceX_ASV/TidyVoiceX_Train ./TidyVoiceX_ASV/TidyVoiceX_Dev"
 CACHE_DIR="${SCRIPT_DIR}/embeddings_cache"
 
 # ===== USER OVERRIDES =====
@@ -65,7 +65,7 @@ echo "  - Cache directory: $CACHE_DIR"
 echo ""
 
 # Run evaluation (use full path to Python)
-/local/scratch/arfarh/wildspoof_challenge/All-Type-ADD/add-env/bin/python "$SCRIPT_DIR/eval_enrollment.py" \
+$PYTHON "$SCRIPT_DIR/eval_enrollment.py" \
     --checkpoint_dir "$CHECKPOINT_DIR" \
     --trials_file "$TRIALS_FILE" \
     --manifest_file "$MANIFEST_FILE" \

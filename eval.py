@@ -263,7 +263,7 @@ def main():
             checkpoint_path = os.path.join(checkpoint_dir, sorted(ckpt_files)[-1])
         else:
             raise FileNotFoundError(f"No checkpoint found in {checkpoint_dir}")
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     state_dict = ckpt.get("model_state_dict", ckpt)
     num_languages_from_ckpt = state_dict["arcface.weight"].shape[0]
     if num_languages_from_ckpt != num_languages:

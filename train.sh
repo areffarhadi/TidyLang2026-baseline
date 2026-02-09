@@ -18,7 +18,7 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Python interpreter
-PYTHON_ENV="./add-env/bin/python"
+PYTHON_ENV="/home/rf/Qwen/qwen-envomni-stable/bin/python3"
 
 if [ -f "$PYTHON_ENV" ]; then
     PYTHON="$PYTHON_ENV"
@@ -27,7 +27,7 @@ else
 fi
 
 # ===== CONFIGURATION (Hardcoded paths) =====
-DATASET_ROOTS="./TidyVoiceX_Train ./TidyVoiceX_Dev"
+DATASET_ROOTS="./TidyVoiceX_ASV/TidyVoiceX_Train ./TidyVoiceX_ASV/TidyVoiceX_Dev"
 
 # Parameters
 GPU_ID=${1:-0}

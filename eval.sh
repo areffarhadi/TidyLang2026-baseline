@@ -20,7 +20,7 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-PYTHON_ENV="./add-env/bin/python"
+PYTHON_ENV="/home/rf/Qwen/qwen-envomni-stable/bin/python3"
 if [ -f "$PYTHON_ENV" ]; then
     PYTHON="$PYTHON_ENV"
 else
@@ -28,9 +28,9 @@ else
 fi
 
 # ===== CONFIGURATION =====
-DATASET_ROOTS="/local/scratch/arfarh/CV_speaker/cv_dataset/CV_datasets_wav/multilingual_lists2/TidyVoiceX_Train /local/scratch/arfarh/CV_speaker/cv_dataset/CV_datasets_wav/multilingual_lists2/TidyVoiceX_Dev"
+DATASET_ROOTS="/home/rf/tidydataset/TidyVoiceX_ASV/TidyLang2026-baseline/TidyVoiceX_ASV/TidyVoiceX_Train /home/rf/tidydataset/TidyVoiceX_ASV/TidyLang2026-baseline/TidyVoiceX_ASV/TidyVoiceX_Dev"
 
-CHECKPOINT_DIR="/local/scratch/arfarh/CV_speaker/cv_dataset/ckpt_lid/lid_layers17-24_simplehead_bs64_ep15_m0.3_s30.0_h512_w2vLarge"
+CHECKPOINT_DIR="./ckpt_lid/lid_layers17-24_simplehead_bs64_ep15_m0.3_s30.0_h512_w2vLarge"
 DEFAULT_MANIFEST="data/manifests/training_manifest.txt"
 
 # ===== USER OVERRIDES =====
