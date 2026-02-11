@@ -25,8 +25,8 @@ fi
 
 # ===== CONFIGURATION =====
 CHECKPOINT_DIR="./ckpt_lid/lid_layers17-24_simplehead_bs64_ep15_m0.3_s30.0_h512_w2vLarge"
-TRIALS_FILE="${SCRIPT_DIR}/data/trials/trials_Dev_clean.txt"
-MANIFEST_FILE="${SCRIPT_DIR}/data/trials/enrollment_manifest_clean.tsv"
+TRIALS_FILE="${SCRIPT_DIR}/data/trials/trials_Dev.txt"
+MANIFEST_FILE="${SCRIPT_DIR}/data/trials/enrollment_manifest.tsv"
 DATASET_ROOTS="./TidyVoiceX_ASV/TidyVoiceX_Train ./TidyVoiceX_ASV/TidyVoiceX_Dev"
 CACHE_DIR="${SCRIPT_DIR}/embeddings_cache"
 
