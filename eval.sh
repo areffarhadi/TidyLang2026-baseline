@@ -28,7 +28,7 @@ else
 fi
 
 # ===== CONFIGURATION =====
-DATASET_ROOTS="/home/rf/tidydataset/TidyVoiceX_ASV/TidyLang2026-baseline/TidyVoiceX_ASV/TidyVoiceX_Train /home/rf/tidydataset/TidyVoiceX_ASV/TidyLang2026-baseline/TidyVoiceX_ASV/TidyVoiceX_Dev"
+DATASET_ROOTS="./TidyVoiceX_ASV/TidyVoiceX_Train ./TidyVoiceX_ASV/TidyVoiceX_Dev"
 
 CHECKPOINT_DIR="./ckpt_lid/lid_layers17-24_simplehead_bs64_ep15_m0.3_s30.0_h512_w2vLarge"
 DEFAULT_MANIFEST="data/manifests/training_manifest.txt"
