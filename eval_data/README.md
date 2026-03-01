@@ -2,6 +2,8 @@
 
 This folder contains evaluation files prepared for TidyLang2026 Challenge.
 
+Download Evaluation data: https://datacollective.mozillafoundation.org/datasets/cmkv32i5e02tumg07j79d3c35
+
 
 ## Files
 
